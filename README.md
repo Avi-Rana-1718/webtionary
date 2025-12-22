@@ -43,7 +43,7 @@ Index size: 1
 Queue size: 15
 Found 42 unique URLs.
 Elapsed: 1234 ms
-Avg time 1234.0 ms
+Avg time 1000 ms
 ```
 
 ## Limitations
