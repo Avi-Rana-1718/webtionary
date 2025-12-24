@@ -4,6 +4,7 @@ import { Cluster } from "puppeteer-cluster";
 export class Webtionary {
   private history: Set<string>;
   private cluster!: Cluster;
+  private writer: any;
 
   private maxDepth: number;
   private indexLimit: number;
@@ -11,6 +12,8 @@ export class Webtionary {
 
   constructor(seedUrl: string, indexLimit = -1, maxDepth = -1) {
     this.history = new Set();
+    this.writer = Bun.file("output.csv").writer();
+    this.writer.write("title,url \n");
     this.indexLimit = indexLimit;
     this.maxDepth = maxDepth;
     this.build(seedUrl);
@@ -40,23 +43,24 @@ export class Webtionary {
 
     await this.cluster.idle();
     await this.cluster.close();
-    console.log("Run duration:", ((Date.now()-startTime)/1000).toFixed(2));
-    
+    console.log("Run duration:", ((Date.now() - startTime) / 1000).toFixed(2));
   }
 
-  private async crawl({ page, data }: { page: Page; data: [string, number] }) {
-    const url = data[0];
-    const currDepth = data[1];
-    
-    
-    // Check if already visited first
-    if (this.history.has(url)) return;
-    
-    // Check limits
-    if (this.maxDepth != -1 && currDepth >= this.maxDepth) return;
-    if (this.indexLimit != -1 && this.history.size >= this.indexLimit) return;
+  private async crawl({ page, data }: { page: Page; data: any }) {
+    const url = new URL(data[0]);
+    const currDepth = Number(data[1]);
 
-    this.history.add(url);
+    if (this.history.has(url.toString())) return;
+    console.log(currDepth, this.maxDepth, url.toString());
+
+    if (this.maxDepth != -1 && currDepth >= this.maxDepth) {
+      console.log("max depth reachhed", currDepth, url.toString());
+      this.queueSize--;
+      return;
+      
+    };
+    if (this.indexLimit != -1 && this.history.size >= this.indexLimit) return;
+    this.history.add(url.toString());
 
     await page.setRequestInterception(true);
     page.on("request", (req) => {
@@ -69,7 +73,7 @@ export class Webtionary {
       }
     });
 
-    const response = await page.goto(url, {
+    const response = await page.goto(url.toString(), {
       waitUntil: "domcontentloaded",
       timeout: 7000,
     });
@@ -79,24 +83,36 @@ export class Webtionary {
       return;
     }
 
-    const hrefs: string[] = await page.$$eval("a[href]", (anchors) => {
-      return Array.from(anchors)
-        .map((a) => a.href)
-        .filter((url): string => url.includes("http"));
-    });
+    const queryData = await page.evaluate(() => ({
+      title: document.title,
+      hrefs: Array.from(document.querySelectorAll("a[href]"))
+        .map((a) => (a as HTMLAnchorElement).href)
+        .filter((url) => url.includes("http")),
+    }));
 
-    console.log("Index size:", this.history.size, "| Queue size:", this.queueSize);
+    this.writer.write(queryData.title + "," + url + " \n");
 
+    console.log(
+      "Index size:",
+      this.history.size,
+      "| Queue size:",
+      this.queueSize
+    );
 
     // Only queue URLs that haven't been visited
-    hrefs.forEach((url) => {
-      if(this.queueSize>=this.indexLimit) return;
-      if (!this.history.has(url)) {
+    queryData.hrefs.forEach((currUrl) => {
+      if (this.indexLimit != -1 && this.queueSize >= this.indexLimit) return;
+      if (!this.history.has(currUrl)) {
+        if (new URL(currUrl).origin == url.origin) {
+          if(currDepth+1!=this.maxDepth)
+          this.cluster.queue([currUrl, currDepth + 1], this.crawl.bind(this));
+        } else {
+          this.cluster.queue([currUrl, 0], this.crawl.bind(this));
+        }
         this.queueSize++;
-        this.cluster.queue([url, currDepth + 1], this.crawl.bind(this));
       }
     });
   }
 }
 
-new Webtionary("https://avirana.com", 100);
+new Webtionary("https://joji.lnk.to/pissinthewind", -1, 1);
